@@ -1,0 +1,12 @@
+fastapi
+python-dotenv
+APScheduler
+sqlalchemy
+google-genai
+requests
+uvicorn
+psycopg2
+google.generativeai
+bs4
+alembic
+
