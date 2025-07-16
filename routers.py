@@ -1,11 +1,13 @@
 import os
 import random
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query, Depends
+from sqlalchemy.orm import Session
+from database import get_db
+from models_db import Question, UserAnswer, SharedQuestion
 from models import (
     QuestionRequest,
     QuestionResponse,
     AnswerRequest,
-    HintRequest,
     ShowAnswerRequest,
     ShareQuestionRequest,
 )
@@ -13,6 +15,7 @@ from typing import List, Dict, Any, Optional
 import google.generativeai as genai
 import logging
 from dotenv import load_dotenv
+import json
 
 
 load_dotenv()
@@ -42,10 +45,9 @@ def generate_with_google(prompt: str) -> str:
 
 
 @router.post("/generate-question", response_model=QuestionResponse)
-def generate_question(req: QuestionRequest):
+def generate_question(req: QuestionRequest, db: Session = Depends(get_db)):
     import uuid
 
-    # 난이도 비율: 상(20%), 중(40%), 하(40%)
     rand = random.random()
     if rand < 0.2:
         difficulty = "상"
@@ -56,50 +58,35 @@ def generate_question(req: QuestionRequest):
     else:
         difficulty = "하"
         score = 1.0
-    qid = str(uuid.uuid4())
 
     prompt = f"""
 [문제 생성 요청]
 과목: {req.subject}
 범위: {req.scope}
 난이도: {difficulty}
-문제 유형: 단서형, 객관식, 단답형 등 다양한 유형 중 랜덤
+문제 유형: 4지선다 객관식
 
-아래 예시처럼 문제, 힌트, 정답만 만들어줘. (보기/선택지는 필요 없음)
+아래 예시처럼 문제, 4개의 선택지(options), 정답(번호), 힌트만 만들어줘.
+문제는 반드시 '문제:'로 시작해서 한 줄로 만들어줘.
 
-예시1(국어-단서형)
-단서1: 신라→실라
-단서2: 실내→실래
-단서3: 광안리→광알리
-힌트: ㄴ이 ㄹ과 만나 ㄹ로 바뀌는 음운 변동
-문제: 다음에서 사용된 음운의 변동은?
-정답: 유음화
-
-예시2(국어-단답형)
-문제: 다음 중 비음화가 일어나는 단어를 고르시오.
-힌트: 비음화는 ㄱ, ㄷ, ㅂ이 ㄴ, ㅁ 앞에서 ㅇ, ㄴ, ㅁ으로 바뀌는 현상
-정답: 국물
-
-예시3(수학-단서형)
-단서: √-1
-힌트: 허수 단위
-문제: 복소수 단위 i의 정의는 무엇인가요?
-정답: i
-
-예시4(수학-단답형)
-문제: 이차방정식 x^2-4=0의 두 실근의 곱을 구하시오.
-힌트: 근과 계수의 관계를 이용
-정답: -4
-
-정답은 반드시 하나만(번호가 아니라 내용) 제공해줘.
+예시)
+문제: 다음 중 한국의 수도는 어디인가요?
+1. 부산
+2. 서울
+3. 대구
+4. 인천
+정답: 2
+힌트: 대한민국의 정치, 경제, 문화의 중심지
 """
 
     ai_text = generate_with_google(prompt)
 
     # Gemini 응답 파싱
     question_text = ""
-    hint = ""
+    options = []
     answer = ""
+    hint = ""
+    first_nonempty = None
     if (
         ai_text
         and not ai_text.startswith("API 호출 중 오류")
@@ -107,82 +94,166 @@ def generate_question(req: QuestionRequest):
     ):
         lines = [line.strip() for line in ai_text.split("\n") if line.strip()]
         for line in lines:
+            if not first_nonempty and line:
+                first_nonempty = line
             if line.startswith("문제:"):
                 question_text = line.replace("문제:", "").strip()
-            elif line.startswith("힌트:"):
-                hint = line.replace("힌트:", "").strip()
+            elif line[:2] in ["1.", "2.", "3.", "4."]:
+                options.append(line[2:].strip())
             elif line.startswith("정답:"):
                 answer = line.replace("정답:", "").strip()
+            elif line.startswith("힌트:"):
+                hint = line.replace("힌트:", "").strip()
+        # 반드시 4개만 반환
+        options = (options + [""] * 4)[:4]
+        # 문제 텍스트가 비어 있으면 백업값 사용
+        if not question_text and first_nonempty:
+            question_text = first_nonempty
     else:
         question_text = (
             f"[예시] {req.subject} - {req.scope} ({difficulty}) 문제를 생성했습니다."
         )
+        options = ["1번", "2번", "3번", "4번"]
+        answer = "1"
         hint = f"[예시] {req.subject} 힌트입니다."
-        answer = f"[예시] {req.subject} 정답입니다."
 
-    question = {
-        "question_id": qid,
-        "question": question_text,
-        "hint": hint,
-        "answer": answer,
-        "difficulty": difficulty,
-        "score": score,
+    # DB에 문제 저장 (options는 응답에만 포함)
+    new_question = Question(
+        subject=req.subject,
+        scope=req.scope,
+        question=question_text,
+        options=json.dumps(options),
+        hint=hint,
+        answer=answer,
+        difficulty=difficulty,
+        score=score,
+    )
+    db.add(new_question)
+    db.commit()
+    db.refresh(new_question)
+
+    return {
+        "question_id": new_question.id,
+        "question": new_question.question,
+        "options": options,
+        "hint": new_question.hint,
+        "answer": new_question.answer,
+        "difficulty": new_question.difficulty,
+        "score": new_question.score,
     }
-    questions_db[qid] = question
-    return question
-
-
-@router.post("/get-hint")
-def get_hint(req: HintRequest):
-    q = questions_db.get(req.question_id)
-    if not q:
-        raise HTTPException(status_code=404, detail="문제를 찾을 수 없습니다.")
-    return {"hint": q["hint"]}
 
 
 @router.post("/submit-answer")
-def submit_answer(req: AnswerRequest):
-    q = questions_db.get(req.question_id)
+def submit_answer(req: AnswerRequest, db: Session = Depends(get_db)):
+    q = db.query(Question).filter(Question.id == req.question_id).first()
     if not q:
         raise HTTPException(status_code=404, detail="문제를 찾을 수 없습니다.")
-    correct = req.answer.strip() == q["answer"]
+    correct = req.answer.strip() == q.answer
     score = 0.0
     if correct:
-        if req.used_hint:
-            score = q["score"] * 0.5
-        else:
-            score = q["score"]
-        user_scores[req.user_id] = user_scores.get(req.user_id, 0) + score
+        score = q.score * 0.5 if req.used_hint else q.score
+    # 풀이 기록 저장
+    user_answer = UserAnswer(
+        user_id=req.user_id,
+        question_id=q.id,
+        user_answer=req.answer,
+        used_hint=req.used_hint,
+        is_correct=correct,
+        score=score,
+    )
+    db.add(user_answer)
+    db.commit()
     return {
         "correct": correct,
         "score": score,
-        "answer": q["answer"] if not correct else None,
+        "answer": q.answer if not correct else None,
     }
 
 
 @router.post("/show-answer")
-def show_answer(req: ShowAnswerRequest):
-    q = questions_db.get(req.question_id)
+def show_answer(req: ShowAnswerRequest, db: Session = Depends(get_db)):
+    q = db.query(Question).filter(Question.id == req.question_id).first()
     if not q:
         raise HTTPException(status_code=404, detail="문제를 찾을 수 없습니다.")
-    return {"answer": q["answer"]}
+    return {"answer": q.answer}
 
 
 @router.get("/ranking")
-def get_ranking():
-    ranking = sorted(user_scores.items(), key=lambda x: x[1], reverse=True)
-    return [{"user_id": uid, "score": score} for uid, score in ranking]
+def get_ranking(
+    user_id: str = Query(..., description="조회할 사용자 ID"),
+    db: Session = Depends(get_db),
+):
+    # user_id별 총점 집계
+    from sqlalchemy import func
+
+    scores = (
+        db.query(UserAnswer.user_id, func.sum(UserAnswer.score).label("total_score"))
+        .group_by(UserAnswer.user_id)
+        .order_by(func.sum(UserAnswer.score).desc())
+        .all()
+    )
+    top_10 = [
+        {"user_id": uid, "score": float(score)}
+        for idx, (uid, score) in enumerate(scores[:10], 1)
+    ]
+    my_rank = None
+    for idx, (uid, score) in enumerate(scores, 1):
+        if uid == user_id:
+            my_rank = {"rank": idx, "user_id": uid, "score": float(score)}
+            break
+    return {"top_10": top_10, "my_rank": my_rank}
+
+
+@router.get("/my-ranking")
+def get_my_ranking(
+    user_id: str = Query(..., description="조회할 사용자 ID"),
+    db: Session = Depends(get_db),
+):
+    from sqlalchemy import func
+
+    scores = (
+        db.query(UserAnswer.user_id, func.sum(UserAnswer.score).label("total_score"))
+        .group_by(UserAnswer.user_id)
+        .order_by(func.sum(UserAnswer.score).desc())
+        .all()
+    )
+    my_rank = None
+    for idx, (uid, score) in enumerate(scores, 1):
+        if uid == user_id:
+            my_rank = {"rank": idx, "user_id": uid, "score": float(score)}
+            break
+    return my_rank
 
 
 @router.post("/share-question")
-def share_question(req: ShareQuestionRequest):
-    q = questions_db.get(req.question_id)
+def share_question(req: ShareQuestionRequest, db: Session = Depends(get_db)):
+    q = db.query(Question).filter(Question.id == req.question_id).first()
     if not q:
         raise HTTPException(status_code=404, detail="문제를 찾을 수 없습니다.")
-    shared_questions.append(q)
+    shared = SharedQuestion(question_id=q.id, shared_by=req.user_id)
+    db.add(shared)
+    db.commit()
     return {"message": "문제가 공유되었습니다."}
 
 
 @router.get("/shared-questions")
-def get_shared_questions():
-    return shared_questions
+def get_shared_questions(db: Session = Depends(get_db)):
+    shared = db.query(SharedQuestion).all()
+    result = []
+    for s in shared:
+        q = db.query(Question).filter(Question.id == s.question_id).first()
+        if q:
+            result.append(
+                {
+                    "question_id": q.id,
+                    "question": q.question,
+                    "options": q.get_options(),
+                    "hint": q.hint,
+                    "answer": q.answer,
+                    "difficulty": q.difficulty,
+                    "score": q.score,
+                    "shared_by": s.shared_by,
+                    "shared_at": s.shared_at,
+                }
+            )
+    return result
