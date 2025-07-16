@@ -179,7 +179,7 @@ def get_ranking(
     db: Session = Depends(get_db),
 ):
     from sqlalchemy import func
-    from models_db import Student
+    from models_db import Student, User
 
     # user_id별 총점 집계
     scores = (
@@ -188,17 +188,21 @@ def get_ranking(
         .order_by(func.sum(UserAnswer.score).desc())
         .all()
     )
-    # 학생 정보 한 번에 조회
+    # 학생 정보와 사용자 정보 한 번에 조회
     user_ids = [uid for uid, _ in scores[:10]]
     students = db.query(Student).filter(Student.user_id.in_(user_ids)).all()
+    users = db.query(User).filter(User.user_id.in_(user_ids)).all()
     student_map = {s.user_id: s for s in students}
+    user_map = {u.user_id: u for u in users}
 
     top_10 = []
     for idx, (uid, score) in enumerate(scores[:10], 1):
         stu = student_map.get(uid)
+        user = user_map.get(uid)
         top_10.append(
             {
                 "user_id": uid,
+                "username": user.username if user else None,
                 "score": float(score),
                 "grade": stu.grade if stu else None,
                 "class_num": stu.class_num if stu else None,
@@ -210,9 +214,11 @@ def get_ranking(
     for idx, (uid, score) in enumerate(scores, 1):
         if uid == user_id:
             stu = db.query(Student).filter(Student.user_id == uid).first()
+            user = db.query(User).filter(User.user_id == uid).first()
             my_rank = {
                 "rank": idx,
                 "user_id": uid,
+                "username": user.username if user else None,
                 "score": float(score),
                 "grade": stu.grade if stu else None,
                 "class_num": stu.class_num if stu else None,
