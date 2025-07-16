@@ -28,11 +28,6 @@ model = genai.GenerativeModel("gemini-2.0-flash")
 
 router = APIRouter()
 
-# 임시 데이터 저장 (DB 연동 전)
-questions_db: Dict[str, Dict[str, Any]] = {}
-user_scores: Dict[str, float] = {}
-shared_questions: List[Dict[str, Any]] = []
-
 
 # Gemini API 호출 함수 (사용자 요청대로 이름 및 구조 변경)
 def generate_with_google(prompt: str) -> str:
@@ -230,15 +225,20 @@ def share_question(req: ShareQuestionRequest, db: Session = Depends(get_db)):
     q = db.query(Question).filter(Question.id == req.question_id).first()
     if not q:
         raise HTTPException(status_code=404, detail="문제를 찾을 수 없습니다.")
-    shared = SharedQuestion(question_id=q.id, shared_by=req.user_id)
+    shared = SharedQuestion(question_id=q.id)
     db.add(shared)
     db.commit()
     return {"message": "문제가 공유되었습니다."}
 
 
 @router.get("/shared-questions")
-def get_shared_questions(db: Session = Depends(get_db)):
-    shared = db.query(SharedQuestion).all()
+def get_shared_questions(subject: str = None, db: Session = Depends(get_db)):
+    query = db.query(SharedQuestion).join(
+        Question, SharedQuestion.question_id == Question.id
+    )
+    if subject:
+        query = query.filter(Question.subject == subject)
+    shared = query.all()
     result = []
     for s in shared:
         q = db.query(Question).filter(Question.id == s.question_id).first()
@@ -247,13 +247,27 @@ def get_shared_questions(db: Session = Depends(get_db)):
                 {
                     "question_id": q.id,
                     "question": q.question,
-                    "options": q.get_options(),
-                    "hint": q.hint,
-                    "answer": q.answer,
                     "difficulty": q.difficulty,
                     "score": q.score,
-                    "shared_by": s.shared_by,
                     "shared_at": s.shared_at,
                 }
             )
+    if result == []:
+        raise HTTPException(status_code=404, detail="공유된 문제가 없습니다")
     return result
+
+
+@router.get("/question/{question_id}")
+def get_question_detail(question_id: int, db: Session = Depends(get_db)):
+    q = db.query(Question).filter(Question.id == question_id).first()
+    if not q:
+        raise HTTPException(status_code=404, detail="문제를 찾을 수 없습니다.")
+    return {
+        "question_id": q.id,
+        "question": q.question,
+        "options": q.get_options(),
+        "hint": q.hint,
+        "answer": q.answer,
+        "difficulty": q.difficulty,
+        "score": q.score,
+    }
