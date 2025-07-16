@@ -7,6 +7,7 @@ from sqlalchemy import (
     Boolean,
     ForeignKey,
     Text,
+    BigInteger,
 )
 from sqlalchemy.orm import declarative_base
 from datetime import datetime
@@ -52,3 +53,24 @@ class SharedQuestion(Base):
     id = Column(Integer, primary_key=True, index=True)
     question_id = Column(Integer, ForeignKey("questions.id"))
     shared_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Class(Base):
+    __tablename__ = "tbl_class"
+    class_id = Column(Integer, primary_key=True)
+    class_major = Column(String(50))  # ENUM이지만 문자열로 처리
+    class_name = Column(String(3))
+    grade = Column(Integer)
+
+
+class Student(Base):
+    __tablename__ = "tbl_student"
+    user_id = Column(BigInteger, primary_key=True)
+    solved_score = Column(BigInteger)
+    elective_subject = Column(String(20))  # ENUM이지만 문자열로 처리
+    class_id = Column(BigInteger, ForeignKey("tbl_class_room.class_id"))
+    version = Column(BigInteger)
+    class_num = Column(Integer)
+    grade = Column(Integer)
+    num = Column(Integer)
+    school_num = Column(String(4))
