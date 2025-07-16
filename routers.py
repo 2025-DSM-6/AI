@@ -178,23 +178,46 @@ def get_ranking(
     user_id: str = Query(..., description="조회할 사용자 ID"),
     db: Session = Depends(get_db),
 ):
-    # user_id별 총점 집계
     from sqlalchemy import func
+    from models_db import Student
 
+    # user_id별 총점 집계
     scores = (
         db.query(UserAnswer.user_id, func.sum(UserAnswer.score).label("total_score"))
         .group_by(UserAnswer.user_id)
         .order_by(func.sum(UserAnswer.score).desc())
         .all()
     )
-    top_10 = [
-        {"user_id": uid, "score": float(score)}
-        for idx, (uid, score) in enumerate(scores[:10], 1)
-    ]
+    # 학생 정보 한 번에 조회
+    user_ids = [uid for uid, _ in scores[:10]]
+    students = db.query(Student).filter(Student.user_id.in_(user_ids)).all()
+    student_map = {s.user_id: s for s in students}
+
+    top_10 = []
+    for idx, (uid, score) in enumerate(scores[:10], 1):
+        stu = student_map.get(uid)
+        top_10.append(
+            {
+                "user_id": uid,
+                "score": float(score),
+                "grade": stu.grade if stu else None,
+                "class_num": stu.class_num if stu else None,
+                "num": stu.num if stu else None,
+            }
+        )
+    # 내 랭킹
     my_rank = None
     for idx, (uid, score) in enumerate(scores, 1):
         if uid == user_id:
-            my_rank = {"rank": idx, "user_id": uid, "score": float(score)}
+            stu = db.query(Student).filter(Student.user_id == uid).first()
+            my_rank = {
+                "rank": idx,
+                "user_id": uid,
+                "score": float(score),
+                "grade": stu.grade if stu else None,
+                "class_num": stu.class_num if stu else None,
+                "num": stu.num if stu else None,
+            }
             break
     return {"top_10": top_10, "my_rank": my_rank}
 
