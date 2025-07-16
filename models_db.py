@@ -39,7 +39,7 @@ class Question(Base):
 class UserAnswer(Base):
     __tablename__ = "user_answers"
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String(50))  # User 테이블과 FK는 나중에 연결
+    user_id = Column(BigInteger)  # String에서 BigInteger로 변경
     question_id = Column(Integer, ForeignKey("questions.id"))
     user_answer = Column(String(200))
     used_hint = Column(Boolean, default=False)
@@ -63,6 +63,21 @@ class Class(Base):
     grade = Column(Integer)
 
 
+class User(Base):
+    __tablename__ = "tbl_user"
+    user_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    username = Column(String(50))
+    account_id = Column(String(100))
+    role = Column(String(10))  # ENUM이지만 문자열로 처리
+    password = Column(String(64), nullable=False)
+
+
+class ClassRoom(Base):
+    __tablename__ = "tbl_class_room"
+    class_id = Column(BigInteger, primary_key=True)
+    # 필요한 컬럼들은 나중에 추가
+
+
 class Student(Base):
     __tablename__ = "tbl_student"
     user_id = Column(BigInteger, primary_key=True)
@@ -73,4 +88,3 @@ class Student(Base):
     class_num = Column(Integer)
     grade = Column(Integer)
     num = Column(Integer)
-    school_num = Column(String(4))
