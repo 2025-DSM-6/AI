@@ -51,5 +51,4 @@ class SharedQuestion(Base):
     __tablename__ = "shared_questions"
     id = Column(Integer, primary_key=True, index=True)
     question_id = Column(Integer, ForeignKey("questions.id"))
-    shared_by = Column(String(50))  # user_id
     shared_at = Column(DateTime, default=datetime.utcnow)
