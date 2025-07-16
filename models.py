@@ -30,5 +30,4 @@ class ShowAnswerRequest(BaseModel):
 
 
 class ShareQuestionRequest(BaseModel):
-    user_id: str
     question_id: str
