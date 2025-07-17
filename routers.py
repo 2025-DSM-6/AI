@@ -235,27 +235,6 @@ def get_ranking(
     return {"top_10": top_10, "my_rank": my_rank}
 
 
-@router.get("/my-ranking", response_model=RankingResponse)
-def get_my_ranking(
-    user_id: str = Query(..., description="조회할 사용자 ID"),
-    db: Session = Depends(get_db),
-):
-    from sqlalchemy import func
-
-    scores = (
-        db.query(UserAnswer.user_id, func.sum(UserAnswer.score).label("total_score"))
-        .group_by(UserAnswer.user_id)
-        .order_by(func.sum(UserAnswer.score).desc())
-        .all()
-    )
-    my_rank = None
-    for idx, (uid, score) in enumerate(scores, 1):
-        if uid == user_id:
-            my_rank = {"rank": idx, "user_id": uid, "score": float(score)}
-            break
-    return my_rank
-
-
 @router.post("/share-question", response_model=ShareResponse)
 def share_question(req: ShareQuestionRequest, db: Session = Depends(get_db)):
     q = db.query(Question).filter(Question.id == req.question_id).first()
