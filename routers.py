@@ -10,6 +10,13 @@ from models import (
     AnswerRequest,
     ShowAnswerRequest,
     ShareQuestionRequest,
+    StudentScoresResponse,
+    AnswerResponse,
+    ShowAnswerResponse,
+    ShareResponse,
+    RankingResponse,
+    SharedQuestionsResponse,
+    QuestionDetailResponse,
 )
 from typing import List, Dict, Any, Optional
 import google.generativeai as genai
@@ -138,7 +145,7 @@ def generate_question(req: QuestionRequest, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/submit-answer")
+@router.post("/submit-answer", response_model=AnswerResponse)
 def submit_answer(req: AnswerRequest, db: Session = Depends(get_db)):
     q = db.query(Question).filter(Question.id == req.question_id).first()
     if not q:
@@ -165,7 +172,7 @@ def submit_answer(req: AnswerRequest, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/show-answer")
+@router.post("/show-answer", response_model=ShowAnswerResponse)
 def show_answer(req: ShowAnswerRequest, db: Session = Depends(get_db)):
     q = db.query(Question).filter(Question.id == req.question_id).first()
     if not q:
@@ -173,7 +180,7 @@ def show_answer(req: ShowAnswerRequest, db: Session = Depends(get_db)):
     return {"answer": q.answer}
 
 
-@router.get("/ranking")
+@router.get("/ranking", response_model=RankingResponse)
 def get_ranking(
     user_id: str = Query(..., description="조회할 사용자 ID"),
     db: Session = Depends(get_db),
@@ -228,7 +235,7 @@ def get_ranking(
     return {"top_10": top_10, "my_rank": my_rank}
 
 
-@router.get("/my-ranking")
+@router.get("/my-ranking", response_model=RankingResponse)
 def get_my_ranking(
     user_id: str = Query(..., description="조회할 사용자 ID"),
     db: Session = Depends(get_db),
@@ -249,7 +256,7 @@ def get_my_ranking(
     return my_rank
 
 
-@router.post("/share-question")
+@router.post("/share-question", response_model=ShareResponse)
 def share_question(req: ShareQuestionRequest, db: Session = Depends(get_db)):
     q = db.query(Question).filter(Question.id == req.question_id).first()
     if not q:
@@ -260,7 +267,7 @@ def share_question(req: ShareQuestionRequest, db: Session = Depends(get_db)):
     return {"message": "문제가 공유되었습니다."}
 
 
-@router.get("/shared-questions")
+@router.get("/shared-questions", response_model=SharedQuestionsResponse)
 def get_shared_questions(subject: str = None, db: Session = Depends(get_db)):
     query = db.query(SharedQuestion).join(
         Question, SharedQuestion.question_id == Question.id
@@ -278,15 +285,15 @@ def get_shared_questions(subject: str = None, db: Session = Depends(get_db)):
                     "question": q.question,
                     "difficulty": q.difficulty,
                     "score": q.score,
-                    "shared_at": s.shared_at,
+                    "shared_at": s.shared_at.isoformat(),  # datetime을 문자열로 변환
                 }
             )
     if result == []:
         raise HTTPException(status_code=404, detail="공유된 문제가 없습니다")
-    return result
+    return {"questions": result}  # questions 필드로 감싸서 반환
 
 
-@router.get("/question/{question_id}")
+@router.get("/question/{question_id}", response_model=QuestionDetailResponse)
 def get_question_detail(question_id: int, db: Session = Depends(get_db)):
     q = db.query(Question).filter(Question.id == question_id).first()
     if not q:
@@ -299,4 +306,60 @@ def get_question_detail(question_id: int, db: Session = Depends(get_db)):
         "answer": q.answer,
         "difficulty": q.difficulty,
         "score": q.score,
+    }
+
+
+@router.get("/student-scores", response_model=StudentScoresResponse)
+def get_student_scores(
+    grade: int = Query(..., description="학년"),
+    class_num: int = Query(..., description="반"),
+    num: int = Query(..., description="번호"),
+    db: Session = Depends(get_db),
+):
+    from sqlalchemy import func
+    from models_db import Student, User, Question
+
+    # 1학년/반/번호로 학생 찾기
+    student = (
+        db.query(Student)
+        .filter(
+            Student.grade == grade, Student.class_num == class_num, Student.num == num
+        )
+        .first()
+    )
+
+    if not student:
+        raise HTTPException(status_code=44, detail="학생을 찾을 수 없습니다.")
+
+    # 2생 이름 가져오기
+    user = db.query(User).filter(User.user_id == student.user_id).first()
+    username = user.username if user else "Unknown"
+    # 3. 해당 학생의 과목별 점수 집계
+    subject_scores = (
+        db.query(Question.subject, func.sum(UserAnswer.score).label("total_score"))
+        .join(UserAnswer, Question.id == UserAnswer.question_id)
+        .filter(UserAnswer.user_id == student.user_id)
+        .group_by(Question.subject)
+        .order_by(func.sum(UserAnswer.score).desc())
+        .all()
+    )
+
+    # 4. 전체 총점 계산
+    total_score = sum(score for _, score in subject_scores)
+
+    # 5. 응답 데이터 구성
+    subject_breakdown = [
+        {"subject": subject, "score": float(score)} for subject, score in subject_scores
+    ]
+
+    return {
+        "student_info": {
+            "user_id": student.user_id,
+            "username": username,
+            "grade": student.grade,
+            "class_num": student.class_num,
+            "num": student.num,
+        },
+        "total_score": float(total_score),
+        "subject_scores": subject_breakdown,
     }
